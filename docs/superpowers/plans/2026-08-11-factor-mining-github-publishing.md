@@ -6,7 +6,7 @@
 
 **Architecture:** Keep the complete research directory untouched on disk and use a default-deny Git ignore policy to expose only approved source, documentation, and notebooks. Build and validate the repository locally in small commits, then create the private GitHub repository from `main`, push once, and verify remote privacy, branch, contents, and commit identity.
 
-**Tech Stack:** PowerShell, Git 2.49, GitHub CLI 2.97, Python 3.13 via the Windows `py` launcher, pandas, NumPy, Jupyter Notebook JSON, BigQuant `dai` runtime for platform-specific execution.
+**Tech Stack:** PowerShell 5.1 with explicit UTF-8 pipeline encoding, Git 2.49, GitHub CLI 2.97, Python 3.13 via the Windows `py` launcher, pandas, NumPy, Jupyter Notebook JSON, BigQuant `dai` runtime for platform-specific execution.
 
 ---
 
@@ -392,6 +392,7 @@ Run:
 
 ~~~powershell
 $env:PYTHONDONTWRITEBYTECODE = '1'
+$OutputEncoding = New-Object Text.UTF8Encoding($false)
 @'
 import math
 import pandas as pd
@@ -415,7 +416,7 @@ assert list(result.columns) == ["date", "instrument", "return_nd"]
 assert len(result) == 1
 assert math.isclose(float(result.loc[0, "return_nd"]), 0.05, rel_tol=0, abs_tol=1e-12)
 print("README quick-start passed: return_nd=0.05")
-'@ | py -3.13 -
+'@ | py -3.13 -X utf8 -
 if ($LASTEXITCODE -ne 0) {
     throw 'README quick-start failed.'
 }
@@ -497,6 +498,7 @@ Run:
 
 ~~~powershell
 $env:PYTHONDONTWRITEBYTECODE = '1'
+$OutputEncoding = New-Object Text.UTF8Encoding($false)
 @'
 import ast
 from pathlib import Path
@@ -520,7 +522,7 @@ machine_learning = [
 assert len(base) == 27, len(base)
 assert machine_learning == ["gan_gru_score"], machine_learning
 print("Python and registry checks passed: 48 modules, 27 base factors, 1 ML factor.")
-'@ | py -3.13 -
+'@ | py -3.13 -X utf8 -
 if ($LASTEXITCODE -ne 0) {
     throw 'Python or factor registry check failed.'
 }
@@ -534,6 +536,7 @@ Run:
 
 ~~~powershell
 $env:PYTHONDONTWRITEBYTECODE = '1'
+$OutputEncoding = New-Object Text.UTF8Encoding($false)
 @'
 import json
 from pathlib import Path
@@ -559,7 +562,7 @@ for path in notebooks:
     assert not errors, f"{path}: {len(errors)} saved error output(s)"
 
 print("Notebook checks passed: 5 valid files, 0 saved error outputs.")
-'@ | py -3.13 -
+'@ | py -3.13 -X utf8 -
 if ($LASTEXITCODE -ne 0) {
     throw 'Notebook validation failed.'
 }
@@ -663,7 +666,7 @@ Write-Output "Local repository ready: $($tracked.Count) tracked files."
 git log --oneline --decorate -5
 ~~~
 
-Expected: clean working tree, 58 tracked files, and six local commits including design, the original plan, the Python-launcher correction, ignore policy, README, and source/examples.
+Expected: clean working tree, 58 tracked files, and at least six local commits covering design, plan and environment corrections, ignore policy, README, and source/examples.
 
 ### Task 4: Create and push the private GitHub repository
 
