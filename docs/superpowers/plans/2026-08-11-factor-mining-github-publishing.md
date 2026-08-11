@@ -704,9 +704,21 @@ Expected: authenticated account `Erpaoer` with repository scope; no full token i
 Run:
 
 ~~~powershell
-$null = & $gh repo view 'Erpaoer/factor-mining-bigquant' --json nameWithOwner 2>$null
-if ($LASTEXITCODE -eq 0) {
+$previousErrorPreference = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+$repoCheck = @(
+    & $gh api 'repos/Erpaoer/factor-mining-bigquant' 2>&1
+)
+$repoExitCode = $LASTEXITCODE
+$ErrorActionPreference = $previousErrorPreference
+$repoMessage = ($repoCheck | Out-String)
+
+if ($repoExitCode -eq 0) {
     throw 'Target repository already exists; stop rather than overwrite or repoint it.'
+}
+if ($repoMessage -notmatch 'HTTP 404') {
+    Write-Output $repoMessage
+    throw 'Repository availability check failed for an unexpected reason.'
 }
 Write-Output 'Target repository name is available.'
 ~~~
