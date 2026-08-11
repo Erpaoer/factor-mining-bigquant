@@ -1,0 +1,34 @@
+# Default-deny: the local folder is a complete research archive, while Git tracks
+# only the curated private repository contents listed below.
+*
+!*/
+
+# Repository entry points.
+!.gitignore
+!README.md
+
+# Core factor library.
+!factor_lib/README.md
+!factor_lib/**/*.py
+
+# Publishing decision records.
+!docs/superpowers/specs/*.md
+!docs/superpowers/plans/*.md
+
+# Curated lightweight notebooks.
+!我的文档/8.因子分析.ipynb
+!研究稿/华泰因子复现/华泰估值类因子/BP因子/BP因子.ipynb
+!研究稿/华泰因子复现/华泰财务质量因子/qfa_roe因子/qfa_roe.ipynb
+!研究稿/华泰因子复现/华泰成长类因子/Profit_G_q因子/Profit_G_q.ipynb
+!模拟策略/exp_wgt_return_6m防御性+收益补偿.ipynb
+
+# Runtime and notebook caches remain excluded even inside allowed directories.
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Local credentials and private key material.
+.env
+.env.*
+*.pem
+*.key
