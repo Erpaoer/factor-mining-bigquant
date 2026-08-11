@@ -1,0 +1,304 @@
+# -*- coding: utf-8 -*-
+"""Profit_G_q：当季净利润同比增长率成长因子。"""
+
+import time
+
+import numpy as np
+import pandas as pd
+
+from factor_lib.common.preprocess.winsorize_mad import winsorize_mad
+from factor_lib.common.preprocess.zscore import zscore
+
+
+OUTPUT_COLUMNS = ["date", "instrument", "profit_g_q"]
+
+
+def calc_profit_g_q(
+    data,
+    target_dates=None,
+    as_of_date=None,
+    winsor_k=5.0,
+    min_cs_count=30,
+    show_progress=False,
+    progress_every=20,
+):
+    """计算 Profit_G_q 裸因子。
+
+    原始定义为最新可得财报的单季度净利润同比增长率。
+    每个目标日独立执行：
+
+    单季度净利润同比增长率
+    → MAD 去极值
+    → Z-score 标准化
+
+    “裸因子”表示不做行业和市值中性化。
+    """
+    if not isinstance(data, pd.DataFrame):
+        raise TypeError("data 必须是 pandas.DataFrame。")
+    if not isinstance(show_progress, (bool, np.bool_)):
+        raise TypeError("show_progress 必须是 bool。")
+    if (
+        not isinstance(progress_every, (int, np.integer))
+        or isinstance(progress_every, (bool, np.bool_))
+        or progress_every <= 0
+    ):
+        raise ValueError("progress_every 必须是正整数。")
+    if (
+        not isinstance(min_cs_count, (int, np.integer))
+        or isinstance(min_cs_count, (bool, np.bool_))
+        or min_cs_count < 3
+    ):
+        raise ValueError("min_cs_count 必须是大于等于 3 的整数。")
+
+    winsor_k = float(winsor_k)
+    if not np.isfinite(winsor_k) or winsor_k <= 0:
+        raise ValueError("winsor_k 必须是有限正数。")
+
+    required_columns = {
+        "date",
+        "instrument",
+        "quarterly_net_profit_yoy",
+    }
+    missing_columns = required_columns - set(data.columns)
+    if missing_columns:
+        raise ValueError(
+            "profit_g_q 因子缺少字段："
+            f"{sorted(missing_columns)}"
+        )
+
+    df = data.loc[
+        :,
+        [
+            "date",
+            "instrument",
+            "quarterly_net_profit_yoy",
+        ],
+    ].copy()
+    df["date"] = pd.to_datetime(
+        df["date"],
+        errors="coerce",
+    ).dt.normalize()
+    if df["date"].isna().any():
+        raise ValueError("profit_g_q 输入存在无效 date。")
+    if df["instrument"].isna().any():
+        raise ValueError(
+            "profit_g_q 输入的 instrument 不允许缺失。"
+        )
+
+    duplicated = df.duplicated(
+        ["date", "instrument"],
+        keep=False,
+    )
+    if duplicated.any():
+        examples = (
+            df.loc[
+                duplicated,
+                ["date", "instrument"],
+            ]
+            .head(5)
+            .astype(str)
+            .to_dict("records")
+        )
+        raise ValueError(
+            "profit_g_q 输入存在重复 date + instrument："
+            f"{examples}"
+        )
+
+    df["quarterly_net_profit_yoy"] = pd.to_numeric(
+        df["quarterly_net_profit_yoy"],
+        errors="coerce",
+    )
+    df["quarterly_net_profit_yoy"] = df[
+        "quarterly_net_profit_yoy"
+    ].replace([np.inf, -np.inf], np.nan)
+
+    if as_of_date is not None:
+        as_of_timestamp = pd.Timestamp(as_of_date)
+        if pd.isna(as_of_timestamp):
+            raise ValueError("as_of_date 必须是可解析日期。")
+        as_of_timestamp = as_of_timestamp.normalize()
+        df = df.loc[df["date"] <= as_of_timestamp].copy()
+
+    if target_dates is None:
+        target_date_index = pd.DatetimeIndex(
+            df["date"].dropna().unique()
+        ).sort_values()
+    else:
+        if isinstance(target_dates, (str, pd.Timestamp)):
+            target_dates = [target_dates]
+        else:
+            try:
+                target_dates = list(target_dates)
+            except TypeError:
+                target_dates = [target_dates]
+
+        target_date_index = pd.DatetimeIndex(
+            pd.to_datetime(target_dates, errors="raise")
+        ).normalize().unique().sort_values()
+
+    if target_date_index.empty:
+        return pd.DataFrame(columns=OUTPUT_COLUMNS)
+
+    available_dates = pd.DatetimeIndex(df["date"].unique())
+    missing_target_dates = target_date_index.difference(
+        available_dates
+    )
+    if not missing_target_dates.empty:
+        preview = [
+            date.strftime("%Y-%m-%d")
+            for date in missing_target_dates[:5]
+        ]
+        raise ValueError(
+            "profit_g_q 缺少目标日财务截面："
+            f"{preview}。请检查财务适配器日期和 as_of_date。"
+        )
+
+    df = df.loc[df["date"].isin(target_date_index)].copy()
+    total_dates = len(target_date_index)
+    result_parts = []
+    started_at = time.perf_counter()
+
+    if show_progress:
+        print(
+            f"\r[profit_g_q] 0/{total_dates} 个截面 | 0.0%",
+            end="",
+            flush=True,
+        )
+
+    try:
+        for position, date in enumerate(
+            target_date_index,
+            start=1,
+        ):
+            cross_section = df.loc[df["date"] == date].copy()
+            raw_factor = cross_section[
+                "quarterly_net_profit_yoy"
+            ].astype(float)
+            valid_count = int(raw_factor.notna().sum())
+
+            factor = pd.Series(
+                np.nan,
+                index=cross_section.index,
+                dtype=float,
+            )
+            if valid_count >= int(min_cs_count):
+                valid_values = raw_factor.dropna()
+                median = valid_values.median()
+                mad = (valid_values - median).abs().median()
+
+                if pd.notna(mad) and mad > 1e-12:
+                    processed = winsorize_mad(
+                        raw_factor,
+                        k=winsor_k,
+                    )
+                else:
+                    lower, upper = valid_values.quantile(
+                        [0.01, 0.99]
+                    )
+                    processed = raw_factor.clip(
+                        lower=lower,
+                        upper=upper,
+                    )
+
+                factor = zscore(processed)
+                factor = factor.replace(
+                    [np.inf, -np.inf],
+                    np.nan,
+                )
+
+            result_parts.append(
+                pd.DataFrame(
+                    {
+                        "date": date,
+                        "instrument": cross_section[
+                            "instrument"
+                        ].to_numpy(),
+                        "profit_g_q": factor.to_numpy(),
+                    }
+                )
+            )
+
+            should_refresh = (
+                position == 1
+                or position % int(progress_every) == 0
+                or position == total_dates
+            )
+            if show_progress and should_refresh:
+                elapsed = time.perf_counter() - started_at
+                remaining = (
+                    elapsed / position
+                    * (total_dates - position)
+                )
+                print(
+                    "\r"
+                    f"[profit_g_q] {position}/{total_dates} 个截面 "
+                    f"| {position / total_dates:.1%} "
+                    f"| 当前：{date:%Y-%m-%d} "
+                    f"| 有效样本：{valid_count:,} "
+                    f"| 已耗时：{elapsed:.1f}s "
+                    f"| 预计剩余：{remaining:.1f}s",
+                    end="",
+                    flush=True,
+                )
+    finally:
+        if show_progress:
+            print()
+
+    if not result_parts:
+        return pd.DataFrame(columns=OUTPUT_COLUMNS)
+
+    return (
+        pd.concat(result_parts, ignore_index=True)
+        .sort_values(
+            ["date", "instrument"],
+            kind="mergesort",
+        )
+        .reset_index(drop=True)
+    )
+
+
+FACTOR = {
+    "name": 'profit_g_q',
+    "func": calc_profit_g_q,
+    "factor_type": "base",
+    "candidate_instances": {"default": {}},
+    "input_schema": {
+        "required": {
+            'date': {},
+            'instrument': {},
+            'quarterly_net_profit_yoy': {},
+        },
+        "conditional": {
+        },
+    },
+    "parameters": {
+        'target_dates': {"default": None},
+        'as_of_date': {"default": None},
+        'winsor_k': {"default": 5.0},
+        'min_cs_count': {"default": 30},
+        'show_progress': {"default": False},
+        'progress_every': {"default": 20},
+    },
+    "data_window": {
+        "lookback_trading_days": 0,
+        "requires_target_date_data": True,
+        "minimum_history_observations": 0,
+        "preheating_required": False,
+    },
+    "output_schema": {
+        'date': {},
+        'instrument': {},
+        'profit_g_q': {},
+    },
+}
+
+
+FACTOR_INFO = """
+# Profit_G_q（单季净利润同比增长）
+
+使用目标日已可得的最新单季净利润同比增速，做截面去极值和标准化。数值越高，代表近期利润增长越快。
+
+- **计算**：直接使用点时财务字段 `quarterly_net_profit_yoy`。
+- **时点**：必须按财报真实可得时间对齐，不能按报告期末提前填充。
+- **研究提示**：该版本不做市值或行业中性化，宜结合行业暴露一并检验。
+"""
